@@ -1,0 +1,110 @@
+#!/bin/bash
+# =============================================================
+# NVIDIA Driver Legado 580xx — Arch Linux
+# Compatível com: GTX 900 series (Maxwell) e GTX 1000 series (Pascal)
+#   Maxwell : GTX 950, 960, 970, 980, 980 Ti, 750, 750 Ti
+#   Pascal  : GTX 1050, 1060, 1070, 1080, 1080 Ti
+#   Mobile  : GTX 950M, 960M, 970M, 980M, 1050M, 1060M, 1070M
+# Ref: https://dev.to/hopsayer/nvidia-drops-gtx-9001000-support-in-590-driver-how-to-fix-on-arch-linux-1175
+# =============================================================
+set -e
+YELLOW="\e[33m"
+GREEN="\e[32m"
+RED="\e[31m"
+BLUE="\e[34m"
+RESET="\e[0m"
+CHECK="✓"
+CROSS="✗"
+AGL="ꕤ"
+title()  { echo -e "\n${BLUE}Driver Nvidia 580xx (Arch) ${AGL}${RESET}\n"; }
+header() { echo -e "\n${BLUE}$1${RESET}"; }
+ok()     { echo -e "  ${GREEN}${CHECK} $1${RESET}"; }
+warn()   { echo -e "  ${YELLOW}⚠ $1${RESET}"; }
+fail()   { echo -e "  ${RED}${CROSS} $1${RESET}"; exit 1; }
+info()   { echo -e "  ${YELLOW}→ $1${RESET}"; }
+title
+# 1. Verificar se é Arch Linux
+header "Verificando sistema"
+if [[ ! -f /etc/arch-release ]]; then
+fail "Este script é exclusivo para Arch Linux. Abortando."
+fi
+ok "Arch Linux detectado"
+# 2. Verificar GPU
+header "Verificando GPU NVIDIA"
+GPU=$(lspci | grep -i nvidia | head -1)
+if [[ -z "$GPU" ]]; then
+fail "Nenhuma GPU NVIDIA detectada. Abortando."
+fi
+ok "GPU detectada: $GPU"
+# 3. Verificar / instalar paru
+header "Verificando AUR helper"
+if command -v paru &>/dev/null; then
+ok "paru já instalado ($(paru --version | head -1))"
+else
+warn "paru não encontrado."
+info "Instalando paru via git..."
+sudo pacman -S --needed --noconfirm base-devel git
+TMPDIR=$(mktemp -d)
+git clone https://aur.archlinux.org/paru.git "$TMPDIR/paru"
+    pushd "$TMPDIR/paru" > /dev/null
+makepkg -si --noconfirm
+    popd > /dev/null
+rm -rf "$TMPDIR"
+ok "paru instalado com sucesso"
+fi
+# 4. Ativar multilib (necessário para lib32)
+header "Verificando repositório multilib"
+if grep -q "^\[multilib\]" /etc/pacman.conf; then
+ok "multilib já ativo"
+else
+warn "multilib desativado — ativando..."
+sudo sed -i '/\[multilib\]/,/Include/s/^#//' /etc/pacman.conf
+sudo pacman -Sy
+ok "multilib ativado"
+fi
+# 5. Remover drivers conflitantes (se existirem)
+header "Removendo drivers conflitantes"
+PKGS_TO_REMOVE=()
+for pkg in nvidia-dkms nvidia-utils nvidia-settings lib32-nvidia-utils \
+xf86-video-nouveau mesa nvidia-open-dkms; do
+if pacman -Q "$pkg" &>/dev/null; then
+PKGS_TO_REMOVE+=("$pkg")
+fi
+done
+if [[ ${#PKGS_TO_REMOVE[@]} -eq 0 ]]; then
+ok "Nenhum driver conflitante encontrado — continuando"
+else
+info "Removendo: ${PKGS_TO_REMOVE[*]}"
+sudo pacman -Rdd --noconfirm "${PKGS_TO_REMOVE[@]}"
+ok "Drivers removidos"
+fi
+# 6. Pré-requisitos de compilação
+header "Instalando dependências de build"
+sudo pacman -S --needed --noconfirm base-devel dkms linux-headers
+ok "Dependências instaladas"
+# 7. Instalar driver legado 580xx
+header "Instalando nvidia-580xx (isso pode demorar alguns minutos)"
+paru -S --noconfirm \
+nvidia-580xx-dkms \
+nvidia-580xx-utils \
+nvidia-580xx-settings \
+lib32-nvidia-580xx-utils
+ok "Driver nvidia-580xx instalado"
+# 8. Blacklist nouveau
+header "Bloqueando driver nouveau"
+BLACKLIST_FILE="/etc/modprobe.d/blacklist-nouveau.conf"
+if [[ ! -f "$BLACKLIST_FILE" ]]; then
+echo -e "blacklist nouveau\noptions nouveau modeset=0" | sudo tee "$BLACKLIST_FILE" > /dev/null
+ok "nouveau bloqueado"
+else
+ok "blacklist nouveau já existente — sem alterações"
+fi
+# 9. Recriar initramfs
+header "Recriando initramfs"
+sudo mkinitcpio -P
+ok "initramfs atualizado"
+# Fim
+echo ""
+echo -e "${GREEN}Tudo pronto! Reinicie o sistema. ${AGL}${RESET}"
+echo -e "${YELLOW}  Após o reboot, verifique com: nvidia-smi${RESET}"
+echo ""
