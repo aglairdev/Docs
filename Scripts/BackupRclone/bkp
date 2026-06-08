@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# ============================================================
+#bkp - backup/restore via rclone
+#  atalho : ~/.local/bin/bkp
+#  logs   : ~/Documentos/Logs/bkp.txt
+# ============================================================
+
+# Config
+REMOTE_NAME=""
+REMOTE_PATH="/"
+UPLOAD_DIR=""           # pasta para upload
+DOWNLOAD_DIR=""         # pasta para download
+RCLONE_OPTS=""          # flags (ex: --dry-run)
+AGL="ꕤ"
+
+set -uo pipefail
+
+LOG_FILE="$HOME/Documentos/Logs/bkp.txt"
+mkdir -p "$(dirname "$LOG_FILE")"
+
+if [[ ! -f "$LOG_FILE" ]]; then
+    printf '%s bkp\n' "$AGL" > "$LOG_FILE"
+fi
+
+# Log
+log() {
+    local status="$1"
+    local msg="$2"
+    local ts
+    ts=$(date +"%d/%m/%Y %H:%M")
+
+    local line
+    if [[ "$status" == "sucesso" ]]; then
+        line="$ts  ✔  backup ${REMOTE_NAME} realizado com sucesso"
+    else
+        line="$ts  ✘  backup ${REMOTE_NAME} não realizado [$msg]"
+    fi
+
+    printf '\n%s\n' "$line" >> "$LOG_FILE"
+    echo "$line"
+}
+
+# Deps
+if ! command -v rclone &>/dev/null; then
+    log "erro" "rclone não encontrado no PATH"
+    exit 1
+fi
+
+# Valida remote
+if ! rclone listremotes | grep -qx "${REMOTE_NAME}:"; then
+    log "erro" "remote '${REMOTE_NAME}' não encontrado: verifique o nome com: rclone listremotes"
+    exit 1
+fi
+
+# Ajuda
+usage() {
+cat <<EOF
+$AGL bkp
+
+  -u, --upload    Envia   $UPLOAD_DIR  →  ${REMOTE_NAME}:${REMOTE_PATH}
+  -d, --download  Baixa   ${REMOTE_NAME}:${REMOTE_PATH}  →  $DOWNLOAD_DIR
+  -l, --log       Exibe os últimos registros de log
+  -h, --help      Exibe esta ajuda
+
+Sem argumento: executa upload (padrão para crontab).
+Log: $LOG_FILE
+EOF
+}
+
+# Upload
+do_upload() {
+    echo "$AGL bkp  upload: ${UPLOAD_DIR} → ${REMOTE_NAME}:${REMOTE_PATH}"
+
+    local tmp_err
+    tmp_err=$(mktemp)
+
+    if rclone copy "$UPLOAD_DIR" "${REMOTE_NAME}:${REMOTE_PATH}" \
+        --progress $RCLONE_OPTS 2>"$tmp_err"; then
+        log "sucesso" ""
+    else
+        local motivo
+        motivo=$(grep -i "error\|failed\|fatal" "$tmp_err" | head -1)
+        [[ -z "$motivo" ]] && motivo=$(tail -1 "$tmp_err")
+        [[ -z "$motivo" ]] && motivo="erro desconhecido"
+        log "erro" "$motivo"
+        rm -f "$tmp_err"
+        exit 1
+    fi
+
+    rm -f "$tmp_err"
+}
+
+# Download
+do_download() {
+    echo "$AGL bkp  download: ${REMOTE_NAME}:${REMOTE_PATH} → ${DOWNLOAD_DIR}"
+    mkdir -p "$DOWNLOAD_DIR"
+
+    local tmp_err
+    tmp_err=$(mktemp)
+
+    if rclone copy "${REMOTE_NAME}:${REMOTE_PATH}" "$DOWNLOAD_DIR" \
+        --progress $RCLONE_OPTS 2>"$tmp_err"; then
+        log "sucesso" ""
+    else
+        local motivo
+        motivo=$(grep -i "error\|failed\|fatal" "$tmp_err" | head -1)
+        [[ -z "$motivo" ]] && motivo=$(tail -1 "$tmp_err")
+        [[ -z "$motivo" ]] && motivo="erro desconhecido"
+        log "erro" "$motivo"
+        rm -f "$tmp_err"
+        exit 1
+    fi
+
+    rm -f "$tmp_err"
+}
+
+# Mostra log
+show_log() {
+    if [[ ! -f "$LOG_FILE" ]]; then
+        echo "Nenhum log encontrado em: $LOG_FILE"
+        exit 0
+    fi
+    tail -n 50 "$LOG_FILE"
+}
+
+# Roteamento
+case "${1:-}" in
+    -u|--upload|"")  do_upload   ;;
+    -d|--download)   do_download ;;
+    -l|--log)        show_log    ;;
+    -h|--help)       usage       ;;
+    *)
+        echo "Opção desconhecida: $1"
+        usage
+        exit 1
+        ;;
+esac
